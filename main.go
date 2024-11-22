@@ -16,6 +16,7 @@ import (
 func DefaultConfig() Config {
 	return Config{
 		MaxWriters: 1,
+		Pragma:     []PragmaConfig{},
 	}
 }
 
@@ -26,6 +27,29 @@ func DBMaxWriters(N uint) ConfigFunc {
 	}
 	return func(c *Config) {
 		c.MaxWriters = N
+	}
+}
+
+func SetPragma(d *sql.DB, config PragmaConfig) {
+	query := fmt.Sprintf("PRAGMA %s=%s", config.setting, config.value)
+	rows, err := d.Query(query)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var out string
+		rows.Scan(&out)
+	}
+	err = rows.Err()
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func WithPragma(config []PragmaConfig) ConfigFunc {
+	return func(c *Config) {
+		c.Pragma = append(c.Pragma, config...)
 	}
 }
 
@@ -44,6 +68,10 @@ func create(name string, configs ...ConfigFunc) *DBObj {
 
 	for _, conf := range configs {
 		conf(&config)
+	}
+
+	for _, pragma := range config.Pragma {
+		SetPragma(db, pragma)
 	}
 
 	_, err = db.Exec(query)
@@ -154,18 +182,18 @@ func InsertObjToDB(db *sql.DB, rec Record) error {
 	query := "insert into test values (?, ?)"
 	stmt, err := tx.Prepare(query)
 	if err != nil {
-		log.Fatal("tx.Prepare failed", err)
+		log.Fatal("tx.Prepare failed ", err)
 	}
 	defer stmt.Close()
 
 	_, err = stmt.Exec(rec.Key, rec.Value)
 	if err != nil {
-		log.Fatal("stmt.Exec failed", err)
+		log.Fatal("stmt.Exec failed ", err)
 	}
 
 	err = tx.Commit()
 	if err != nil {
-		log.Fatal("tx.Commit failed", err)
+		log.Fatal("tx.Commit failed ", err)
 	}
 
 	return nil
@@ -223,10 +251,16 @@ func (d *DBObj) InsertNRandom(N int) {
 }
 
 func main() {
-	dbObject := create("test.db", DBMaxWriters(1))
+	dbObject := create("test.db", DBMaxWriters(1), WithPragma([]PragmaConfig{
+		{"journal_mode", "WAL"},
+		{"busy_timeout", "5000"},
+		{"synchronous", "NORMAL"},
+	}))
 	defer dbObject.CloseDB()
 
-	dbObject.SetJournalMode(ModeWAL)
+	log.Printf("dbObject %+v", dbObject)
+	log.Printf("journal_mode %s", dbObject.GetJournalMode())
+
 	dbObject.InsertNRandom(MAX_INSERTS)
 
 	dbObject.GlobDeleteDB()
